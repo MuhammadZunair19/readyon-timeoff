@@ -251,7 +251,7 @@ describe('RequestsService (Unit)', () => {
         return cb({});
       });
 
-      await expect(service.cancelRequest('request-1')).rejects.toThrow(
+      await expect(service.cancelRequest('request-1', 'E001')).rejects.toThrow(
         InvalidStateTransitionException,
       );
     });
@@ -264,7 +264,7 @@ describe('RequestsService (Unit)', () => {
         return cb({});
       });
 
-      await expect(service.approveRequest('request-1', { managerId: 'MGR-001' })).rejects.toThrow(
+      await expect(service.approveRequest('request-1', 'MGR-001')).rejects.toThrow(
         InvalidStateTransitionException,
       );
     });
@@ -272,6 +272,7 @@ describe('RequestsService (Unit)', () => {
     it('should handle HCM timeout during approval gracefully', async () => {
       jest.spyOn(requestRepository, 'findOne').mockResolvedValue(mockRequest);
       jest.spyOn(balanceService, 'getBalance').mockResolvedValue({
+        id: 'balance-1',
         employeeId: 'E001',
         locationId: 'NYC',
         leaveType: 'ANNUAL',
@@ -296,7 +297,7 @@ describe('RequestsService (Unit)', () => {
         });
       });
 
-      const result = await service.approveRequest('request-1', { managerId: 'MGR-001' });
+      const result = await service.approveRequest('request-1', 'MGR-001');
 
       expect(result.status).toBe(TimeOffRequestStatus.HCM_FAILED);
     });
@@ -304,6 +305,7 @@ describe('RequestsService (Unit)', () => {
     it('should not approve request if HCM rejects it', async () => {
       jest.spyOn(requestRepository, 'findOne').mockResolvedValue(mockRequest);
       jest.spyOn(balanceService, 'getBalance').mockResolvedValue({
+        id: 'balance-1',
         employeeId: 'E001',
         locationId: 'NYC',
         leaveType: 'ANNUAL',
@@ -330,7 +332,7 @@ describe('RequestsService (Unit)', () => {
         });
       });
 
-      const result = await service.approveRequest('request-1', { managerId: 'MGR-001' });
+      const result = await service.approveRequest('request-1', 'MGR-001');
 
       expect(result.status).toBe(TimeOffRequestStatus.HCM_FAILED);
     });
@@ -359,7 +361,7 @@ describe('RequestsService (Unit)', () => {
         return cb({});
       });
 
-      const result = await service.cancelRequest('request-1');
+      const result = await service.cancelRequest('request-1', 'E001');
 
       expect(result.status).toBe(TimeOffRequestStatus.CANCELLED);
       expect(hcmAdapter.reverseTimeOff).toHaveBeenCalledWith('TXN-123');

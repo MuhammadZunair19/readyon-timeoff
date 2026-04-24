@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<coverage generated="1777053040789" clover="3.2.0">
-  <project timestamp="1777053040789" name="All files">
+<coverage generated="1777053067663" clover="3.2.0">
+  <project timestamp="1777053067663" name="All files">
     <metrics statements="787" coveredstatements="469" conditionals="168" coveredconditionals="53" methods="102" coveredmethods="56" elements="1057" coveredelements="578" complexity="0" loc="787" ncloc="787" packages="15" files="29" classes="29"/>
     <package name="hcm-mock-server.src">
       <metrics statements="6" coveredstatements="0" conditionals="0" coveredconditionals="0" methods="0" coveredmethods="0"/>

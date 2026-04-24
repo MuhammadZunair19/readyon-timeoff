@@ -168,8 +168,8 @@ describe('HcmAdapter (Unit)', () => {
       const result = await adapter.getBatchBalances();
 
       expect(result).toHaveLength(2);
-      expect(result[0].employeeId).toBe('E001');
-      expect(result[1].employeeId).toBe('E002');
+      expect(result[0]!.employeeId).toBe('E001');
+      expect(result[1]!.employeeId).toBe('E002');
       expect(httpService.get).toHaveBeenCalledWith(
         'http://hcm.test:3001/hcm/batch/balances',
         expect.objectContaining({ timeout: 5000 }),
@@ -346,8 +346,8 @@ describe('HcmAdapter (Unit)', () => {
       const result = await adapter.getBatchBalances();
 
       expect(result).toHaveLength(100);
-      expect(result[0].employeeId).toBe('E000');
-      expect(result[99].employeeId).toBe('E099');
+      expect(result[0]!.employeeId).toBe('E000');
+      expect(result[99]!.employeeId).toBe('E099');
     });
 
     it('should handle empty batch response', async () => {
