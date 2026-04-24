@@ -1,0 +1,901 @@
+\documentclass[12pt,a4paper]{article}
+
+% Packages
+\usepackage[utf-8]{inputenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{lastpage}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{float}
+
+% Styling
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstset{
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=2
+}
+
+% Header and Footer
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{ReadyOn Time-Off Microservice}
+\lhead{Technical Requirements Document}
+\cfoot{\thepage\ of \pageref{LastPage}}
+
+% Document
+\title{%
+    \textbf{ReadyOn Time-Off Microservice}\\
+    \large Technical Requirements Document (TRD)\\
+    \large v1.0
+}
+\author{Engineering Team}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section*{Executive Summary}
+
+The ReadyOn Time-Off Microservice is a production-ready NestJS backend system designed to manage employee leave balances and time-off request lifecycles while maintaining synchronization with Human Capital Management (HCM) systems. This document outlines the technical requirements, key design challenges, proposed solutions, and alternative approaches considered.
+
+The system addresses the critical problem of maintaining balance integrity across two independent systems: ReadyOn (employee-facing platform) and the HCM system (source of truth). The microservice implements defensive validation, idempotent operations, audit trails, and automatic reconciliation to ensure data consistency even when external systems fail or operate independently.
+
+\tableofcontents
+\newpage
+
+\section{Problem Statement \& Objectives}
+
+\subsection{Core Problem}
+
+Organizations typically use an HCM system (e.g., Workday, SAP) as the authoritative source for employee data, including leave balances. However, ReadyOn serves as the primary user interface for employees to request time off. This creates a synchronization challenge:
+
+\begin{enumerate}
+    \item \textbf{HCM is the source of truth} — Balances in HCM must never be considered incorrect
+    \item \textbf{ReadyOn provides the UX} — Employees interact with ReadyOn for requesting leave
+    \item \textbf{Independent updates occur} — HCM balances change independently (anniversary bonuses, year-end resets, policy changes)
+    \item \textbf{Distributed system complexity} — Network failures, timeouts, and partial failures can occur
+\end{enumerate}
+
+\subsection{Key Challenges}
+
+\subsubsection{Challenge 1: Balance Synchronization}
+
+\textbf{Problem:} Keeping two independent systems in sync is inherently difficult. If an employee has 20 days of leave and requests 5 days on ReadyOn, we must verify:
+\begin{itemize}
+    \item ReadyOn's local balance reflects reality
+    \item HCM agrees with the available balance
+    \item No race conditions occur if multiple requests happen simultaneously
+    \item External systems can make independent balance changes
+\end{itemize}
+
+\textbf{Requirements:}
+\begin{itemize}
+    \item Real-time validation against HCM before approval
+    \item Handle cases where HCM balance changes between request creation and approval
+    \item Maintain eventual consistency even during network outages
+    \item Reconcile stale local data with HCM on a scheduled basis
+\end{itemize}
+
+\subsubsection{Challenge 2: Handling HCM Independent Updates}
+
+\textbf{Problem:} ReadyOn is not the only system updating HCM. An employee may receive:
+\begin{itemize}
+    \item Work anniversary bonus (e.g., +5 days)
+    \item Year-end balance reset (e.g., ANNUAL reset to 20 days)
+    \item Policy changes (e.g., location-specific entitlements)
+\end{itemize}
+
+When these events occur in HCM, ReadyOn must detect and handle them correctly:
+\begin{itemize}
+    \item Pending requests may become invalid (insufficient balance)
+    \item Previously approved requests may need review
+    \item Local balance cache must be updated
+\end{itemize}
+
+\textbf{Requirements:}
+\begin{itemize}
+    \item Process batch balance updates from HCM
+    \item Process event-driven updates (anniversary, year-end)
+    \item Flag requests that become invalid due to balance changes
+    \item Maintain audit trail of all changes
+\end{itemize}
+
+\subsubsection{Challenge 3: Defensive Validation}
+
+\textbf{Problem:} HCM may not always validate requests correctly or communicate errors reliably. We must not blindly trust HCM responses.
+
+\textbf{Requirements:}
+\begin{itemize}
+    \item Validate request against local balance before submission
+    \item Re-check HCM balance after submission before marking approved
+    \item Handle HCM failures gracefully (retry, flag for review)
+    \item Maintain local balance as defensive copy
+    \item Track and alert on discrepancies
+\end{itemize}
+
+\subsubsection{Challenge 4: Idempotency \& Deduplication}
+
+\textbf{Problem:} In distributed systems, messages can be delivered multiple times. A batch sync or event notification from HCM might be resent due to network issues.
+
+\textbf{Requirements:}
+\begin{itemize}
+    \item Ensure duplicate batch syncs don't double-count balance updates
+    \item Prevent duplicate balance charges from repeated requests
+    \item Safely replay events without side effects
+    \item Track processed operations using deterministic keys
+\end{itemize}
+
+\subsubsection{Challenge 5: Race Conditions \& Concurrency}
+
+\textbf{Problem:} Multiple operations may attempt to modify the same balance simultaneously:
+\begin{itemize}
+    \item Employee submits two requests concurrently
+    \item HCM updates balance while request is being approved
+    \item Reconciliation cron job runs while balance is being modified
+\end{itemize}
+
+\textbf{Requirements:}
+\begin{itemize}
+    \item Prevent overselling of leave
+    \item Ensure transactions are ACID-compliant
+    \item Handle optimistic locking conflicts with retry logic
+    \item Maintain data integrity under concurrent load
+\end{itemize}
+
+\newpage
+
+\section{Proposed Solution}
+
+\subsection{Architecture Overview}
+
+The microservice is built using NestJS with a modular, layered architecture:
+
+\begin{verbatim}
+┌─────────────────────────────────────────────────┐
+│         Client Applications & HCM               │
+├─────────────────────────────────────────────────┤
+│  REST Endpoints (Request, Balance, Sync, Health)│
+├─────────────────────────────────────────────────┤
+│  Business Logic Modules (Requests, Balance,     │
+│  Sync, Audit, HCM Adapter)                      │
+├─────────────────────────────────────────────────┤
+│  TypeORM Repositories & Database Layer          │
+├─────────────────────────────────────────────────┤
+│  SQLite Database (Schema with Indexes)          │
+└─────────────────────────────────────────────────┘
+\end{verbatim}
+
+\subsection{Core Design Patterns}
+
+\subsubsection{1. Defensive Copy Pattern}
+
+\textbf{Approach:} Maintain a local copy of HCM balances in ReadyOn.
+
+\textbf{Rationale:}
+\begin{itemize}
+    \item HCM may be unavailable or slow
+    \item Enable local request validation without external dependency
+    \item Use as baseline for detecting inconsistencies
+    \item Support offline operation (graceful degradation)
+\end{itemize}
+
+\textbf{Implementation:}
+\begin{itemize}
+    \item Store balances in local SQLite: \texttt{LeaveBalanceEntity}
+    \item Track \texttt{lastSyncedAt} timestamp for staleness detection
+    \item Query local balance for availability checks
+    \item Validate against HCM before approval (re-check)
+\end{itemize}
+
+\textbf{Pseudocode:}
+\begin{lstlisting}[language=TypeScript]
+async approveRequest(requestId: string): Promise<void> {
+    // 1. Check local balance
+    const localBalance = await balanceRepo.findOne({
+        employeeId, locationId, leaveType
+    });
+    if (localBalance.availableDays < daysRequested) {
+        throw InsufficientBalanceError();
+    }
+    
+    // 2. Re-check HCM (defensive)
+    const hcmBalance = await hcmAdapter.getBalance(...);
+    if (hcmBalance.availableDays < daysRequested) {
+        throw HcmInsufficientBalanceError();
+    }
+    
+    // 3. Reserve in local database
+    await balanceService.reserveBalance(...);
+    
+    // 4. Submit to HCM
+    await hcmAdapter.fileTimeOff(...);
+    
+    // 5. Mark as approved
+    await requestRepo.update(requestId, { status: APPROVED });
+}
+\end{lstlisting}
+
+\subsubsection{2. Optimistic Locking Pattern}
+
+\textbf{Approach:} Use version-based concurrency control via \texttt{@VersionColumn()}.
+
+\textbf{Rationale:}
+\begin{itemize}
+    \item Detect concurrent modifications
+    \item Automatically retry on version conflict
+    \item Avoid locks that would create bottlenecks
+    \item Detect race conditions early
+\end{itemize}
+
+\textbf{Implementation:}
+\begin{itemize}
+    \item Add \texttt{version} column to \texttt{LeaveBalanceEntity}
+    \item On update, include version in WHERE clause: \texttt{WHERE id = ? AND version = ?}
+    \item On failure (0 rows updated), retry operation
+    \item Retry limit: configurable (default 10 attempts)
+\end{itemize}
+
+\textbf{SQL Generated:}
+\begin{lstlisting}[language=SQL]
+UPDATE leave_balance 
+SET used_days = used_days + 5, version = version + 1
+WHERE id = ? AND version = 15
+\end{lstlisting}
+
+\subsubsection{3. Idempotent Batch Processing Pattern}
+
+\textbf{Approach:} Use SHA256 hash of batch content as idempotency key.
+
+\textbf{Rationale:}
+\begin{itemize}
+    \item Safely replay failed batch syncs
+    \item Prevent duplicate balance updates
+    \item Enable retry without side effects
+    \item Deterministic deduplication (same content = same hash)
+\end{itemize}
+
+\textbf{Implementation:}
+\begin{itemize}
+    \item Store \texttt{idempotencyKey} in \texttt{SyncEventEntity}
+    \item Before processing batch: check if key exists
+    \item If exists with status COMPLETED: return cached result
+    \item If exists with status PENDING: wait or skip
+    \item On completion: mark with COMPLETED status
+\end{itemize}
+
+\textbf{Hash Algorithm:}
+\begin{lstlisting}[language=TypeScript]
+function generateIdempotencyKey(batch: HcmBatchDto): string {
+    const content = JSON.stringify(batch.balances); // Sorted
+    return createHash('sha256').update(content).digest('hex');
+}
+\end{lstlisting}
+
+\subsubsection{4. Event-Driven Reconciliation Pattern}
+
+\textbf{Approach:} Scheduled cron job to detect and sync stale balances.
+
+\textbf{Rationale:}
+\begin{itemize}
+    \item Detect balance changes that occurred in HCM
+    \item Recover from missed event notifications
+    \item Enforce eventual consistency
+    \item Background operation (no customer impact)
+\end{itemize}
+
+\textbf{Implementation:}
+\begin{itemize}
+    \item Cron job runs every 6 hours (configurable)
+    \item Query all balances with \texttt{lastSyncedAt} > 6 hours
+    \item Fetch all balances from HCM batch endpoint
+    \item Compare and update local balances
+    \item Flag PENDING requests if balance insufficient
+\end{itemize}
+
+\subsubsection{5. Request Status Lifecycle Pattern}
+
+\textbf{Approach:} Explicit state machine for request status transitions.
+
+\textbf{Rationale:}
+\begin{itemize}
+    \item Prevent invalid state transitions
+    \item Enable business logic per state
+    \item Improve auditability and debuggability
+\end{itemize}
+
+\textbf{State Diagram:}
+\begin{verbatim}
+PENDING ─────→ APPROVED ─→ USED (upon completion)
+    ↓              ↓
+    ├─→ REJECTED   ├─→ CANCELLED
+    ├─→ REQUIRES_REVIEW (if balance changed)
+    └─→ HCM_FAILED (if HCM submission failed)
+\end{verbatim}
+
+\subsection{Data Model}
+
+\subsubsection{LeaveBalanceEntity}
+
+\textbf{Purpose:} Tracks available, pending, and used leave days per employee per location per leave type.
+
+\textbf{Schema:}
+\begin{lstlisting}[language=SQL]
+CREATE TABLE leave_balance (
+    id UUID PRIMARY KEY,
+    employee_id TEXT NOT NULL,
+    location_id TEXT NOT NULL,
+    leave_type TEXT NOT NULL,
+    total_days REAL NOT NULL,
+    used_days REAL NOT NULL DEFAULT 0,
+    pending_days REAL NOT NULL DEFAULT 0,
+    last_synced_at DATETIME NOT NULL,
+    version INT NOT NULL DEFAULT 0,  -- Optimistic locking
+    created_at DATETIME,
+    updated_at DATETIME,
+    UNIQUE(employee_id, location_id, leave_type)
+);
+\end{lstlisting}
+
+\textbf{Computed Property:}
+\begin{lstlisting}[language=TypeScript]
+get availableDays(): number {
+    return this.totalDays - this.usedDays - this.pendingDays;
+}
+\end{lstlisting}
+
+\subsubsection{TimeOffRequestEntity}
+
+\textbf{Purpose:} Tracks individual leave requests through their lifecycle.
+
+\textbf{Schema:}
+\begin{lstlisting}[language=SQL]
+CREATE TABLE time_off_request (
+    id UUID PRIMARY KEY,
+    employee_id TEXT NOT NULL,
+    location_id TEXT NOT NULL,
+    leave_type TEXT NOT NULL,
+    start_date TEXT NOT NULL,  -- ISO 8601 format
+    end_date TEXT NOT NULL,
+    days_requested REAL NOT NULL,
+    notes TEXT,
+    status ENUM(PENDING, APPROVED, REJECTED, CANCELLED, 
+                HCM_FAILED, REQUIRES_REVIEW) NOT NULL,
+    hcm_transaction_id TEXT UNIQUE,  -- Track HCM submission
+    created_at DATETIME,
+    updated_at DATETIME
+);
+\end{lstlisting}
+
+\subsubsection{AuditLogEntity}
+
+\textbf{Purpose:} Immutable append-only log of all balance changes.
+
+\textbf{Schema:}
+\begin{lstlisting}[language=SQL]
+CREATE TABLE audit_log (
+    id UUID PRIMARY KEY,
+    operation_type ENUM(RESERVE, CONSUME, REVERSE, 
+                        SYNC, BONUS, RESET) NOT NULL,
+    employee_id TEXT NOT NULL,
+    location_id TEXT NOT NULL,
+    leave_type TEXT NOT NULL,
+    old_available_days REAL,
+    new_available_days REAL,
+    actor_id TEXT,  -- User or system that made change
+    created_at DATETIME NOT NULL
+);
+-- No UPDATE or DELETE allowed on this table
+\end{lstlisting}
+
+\subsubsection{SyncEventEntity}
+
+\textbf{Purpose:} Track sync operations for idempotency and audit.
+
+\textbf{Schema:}
+\begin{lstlisting}[language=SQL]
+CREATE TABLE sync_event (
+    id UUID PRIMARY KEY,
+    idempotency_key TEXT UNIQUE NOT NULL,
+    source ENUM(BATCH, EVENT) NOT NULL,
+    status ENUM(PENDING, COMPLETED, FAILED) NOT NULL,
+    processed_count INT,
+    flagged_count INT,
+    error_message TEXT,
+    created_at DATETIME,
+    updated_at DATETIME
+);
+\end{lstlisting}
+
+\subsection{API Endpoints}
+
+\subsubsection{Balance Endpoints}
+
+\begin{itemize}
+    \item \texttt{GET /api/employees/{employeeId}/balances/{locationId}} — Get balances
+    \item \texttt{GET /api/employees/{employeeId}/balances} — Get all balances for employee
+\end{itemize}
+
+\subsubsection{Request Endpoints}
+
+\begin{itemize}
+    \item \texttt{POST /api/time-off/requests} — Create request
+    \item \texttt{GET /api/time-off/requests} — List requests (with filters)
+    \item \texttt{GET /api/time-off/requests/{requestId}} — Get request
+    \item \texttt{POST /api/time-off/requests/{requestId}/approve} — Approve request
+    \item \texttt{POST /api/time-off/requests/{requestId}/reject} — Reject request
+    \item \texttt{DELETE /api/time-off/requests/{requestId}} — Cancel request
+\end{itemize}
+
+\subsubsection{Sync Endpoints}
+
+\begin{itemize}
+    \item \texttt{POST /api/sync/batch} — Process batch balance update from HCM (HMAC-validated)
+    \item \texttt{POST /api/sync/event} — Process event (anniversary, year-end) from HCM (HMAC-validated)
+\end{itemize}
+
+\subsubsection{Health Endpoint}
+
+\begin{itemize}
+    \item \texttt{GET /health} — Service health check
+\end{itemize}
+
+\newpage
+
+\section{Key Design Decisions}
+
+\subsection{Decision 1: Database Choice - SQLite}
+
+\textbf{Selected:} SQLite via better-sqlite3 driver
+
+\textbf{Rationale:}
+\begin{itemize}
+    \item Zero-configuration setup
+    \item Embedded database (no separate server)
+    \item Full ACID compliance with transactions
+    \item Suitable for microservice with moderate load
+    \item Easy deployment and backup
+    \item Strong typing via TypeORM ORM
+\end{itemize}
+
+\textbf{Considerations:}
+\begin{itemize}
+    \item Not suitable for extremely high concurrency (multi-process)
+    \item Solution: Run single NestJS process per instance
+    \item Horizontal scaling via load balancing (read-replicas possible with replication)
+\end{itemize}
+
+\subsection{Decision 2: Optimistic Locking vs Pessimistic Locking}
+
+\textbf{Selected:} Optimistic Locking via \texttt{@VersionColumn()}
+
+\textbf{Rationale:}
+\begin{itemize}
+    \item Higher throughput (no locking overhead)
+    \item Better for read-heavy workloads
+    \item Automatic retry mechanism
+    \item Simple implementation in TypeORM
+\end{itemize}
+
+\textbf{Trade-offs:}
+\begin{itemize}
+    \item Requires retry logic (handled automatically)
+    \item May fail under extreme contention
+    \item Solution: Retry limit + exponential backoff
+\end{itemize}
+
+\subsection{Decision 3: Balance Staleness Threshold - 6 Hours}
+
+\textbf{Selected:} Reconcile balances older than 6 hours
+
+\textbf{Rationale:}
+\begin{itemize}
+    \item Balances rarely change outside of HCM batch syncs
+    \item 6-hour window captures most anniversary/policy changes
+    \item Reasonable scheduling frequency
+    \item Configurable via environment variable
+\end{itemize}
+
+\textbf{Alternative Thresholds Considered:}
+\begin{itemize}
+    \item 1 hour: Too frequent, unnecessary load
+    \item 24 hours: Too long, risks stale data
+    \item Event-driven only: Missed updates if events lost
+\end{itemize}
+
+\subsection{Decision 4: Idempotency Key - SHA256 Hash of Batch}
+
+\textbf{Selected:} SHA256 hash of sorted batch content
+
+\textbf{Rationale:}
+\begin{itemize}
+    \item Deterministic (same content = same hash)
+    \item Cryptographically secure
+    \item Language-independent (can validate across systems)
+    \item Reduces payload overhead
+\end{itemize}
+
+\textbf{Alternative Considered:}
+\begin{itemize}
+    \item Client-provided UUID: Risk of collisions or reuse
+    \item Timestamp-based: Not deterministic
+    \item Random UUID: Cannot dedup without tracking all UUIDs
+\end{itemize}
+
+\subsection{Decision 5: HMAC Signature Validation}
+
+\textbf{Selected:} HMAC-SHA256 on batch/event endpoints
+
+\textbf{Rationale:}
+\begin{itemize}
+    \item Prevents unauthorized balance updates
+    \item Detects tampering with batch data
+    \item Simple request-response validation
+    \item Works with non-HTTPS channels (security in depth)
+\end{itemize}
+
+\textbf{Implementation:}
+\begin{lstlisting}[language=TypeScript]
+const expectedSignature = createHmac('sha256', secret)
+    .update(JSON.stringify(batch))
+    .digest('hex');
+    
+if (expectedSignature !== receivedSignature) {
+    throw UnauthorizedException();
+}
+\end{lstlisting}
+
+\newpage
+
+\section{Handling Failure Scenarios}
+
+\subsection{Scenario 1: HCM Unavailable During Request Approval}
+
+\textbf{Problem:} Request approval requires HCM submission, but HCM is down.
+
+\textbf{Solution:}
+\begin{enumerate}
+    \item Reserve balance locally (mark as pending)
+    \item Attempt HCM submission with timeout (default 5 seconds)
+    \item On timeout/failure: Set request status to \texttt{HCM\_FAILED}
+    \item Alert monitoring system
+    \item Retry mechanism: Reconciliation cron will detect and retry
+\end{enumerate}
+
+\subsection{Scenario 2: Balance Changed Between Check and Approval}
+
+\textbf{Problem:} Employee had 5 days available, we reserved them, then balance dropped to 2 days in HCM.
+
+\textbf{Solution:}
+\begin{enumerate}
+    \item During approval, re-check HCM balance
+    \item If insufficient: Set to \texttt{REQUIRES\_REVIEW}
+    \item Manager notified to manually review and either:
+        \begin{itemize}
+            \item Update local balance (if HCM correct)
+            \item Approve anyway (if override needed)
+            \item Reject request
+        \end{itemize}
+    \item Audit trail captures discrepancy
+\end{enumerate}
+
+\subsection{Scenario 3: Duplicate Batch Sync Received}
+
+\textbf{Problem:} HCM re-sends batch due to network timeout; we don't have idempotent processing.
+
+\textbf{Solution:}
+\begin{enumerate}
+    \item Generate idempotency key from batch content (SHA256)
+    \item Check if key exists in \texttt{SyncEventEntity}
+    \item If status = COMPLETED: Return cached result (no re-processing)
+    \item If status = PENDING: Wait for completion
+    \item If status = FAILED: Retry processing
+    \item Ensures exactly-once semantics
+\end{enumerate}
+
+\subsection{Scenario 4: Concurrent Balance Modifications}
+
+\textbf{Problem:} Two requests modify same balance simultaneously.
+
+\textbf{Solution:}
+\begin{enumerate}
+    \item Use optimistic locking with \texttt{version} column
+    \item First write succeeds: \texttt{version} 1 → 2
+    \item Second write fails: WHERE version = 1 returns 0 rows
+    \item Retry logic: Automatically fetch latest and retry
+    \item Retry limit: 10 attempts (configurable)
+    \item On final failure: Return conflict error to client
+\end{enumerate}
+
+\subsection{Scenario 5: Anniversary Bonus Received While Pending Request Active}
+
+\textbf{Problem:} Employee has PENDING request for 5 days, then receives +5 anniversary bonus.
+
+\textbf{Solution:}
+\begin{enumerate}
+    \item HCM sends event update with new balance
+    \item Process event: Update balance, calculate new available
+    \item Check all PENDING requests: Are they still valid?
+    \item If request still valid: No action
+    \item If request became invalid (available < requested): 
+        \begin{itemize}
+            \item Set to \texttt{REQUIRES\_REVIEW}
+            \item Manager reviews given new balance situation
+        \end{itemize}
+\end{enumerate}
+
+\newpage
+
+\section{Alternative Approaches Considered}
+
+\subsection{Alternative 1: Read-Only Cache (No Local Balance Storage)}
+
+\textbf{Approach:} Query HCM API for every availability check; don't maintain local copy.
+
+\textbf{Pros:}
+\begin{itemize}
+    \item Single source of truth (HCM)
+    \item No sync challenges
+\end{itemize}
+
+\textbf{Cons:}
+\begin{itemize}
+    \item Every request requires HCM API call (latency 2-5 seconds each)
+    \item Request approval rate limited by HCM API speed
+    \item If HCM down: No requests can be created
+    \item No graceful degradation
+    \item Does not meet performance requirement
+\end{itemize}
+
+\textbf{Recommendation:} Not suitable; defensive copy approach better.
+
+\subsection{Alternative 2: Pessimistic Locking}
+
+\textbf{Approach:} Lock row during modification via database-level lock.
+
+\textbf{Pros:}
+\begin{itemize}
+    \item Guaranteed serialization
+    \item No retry logic needed
+\end{itemize}
+
+\textbf{Cons:}
+\begin{itemize}
+    \item Lower throughput
+    \item Risk of deadlocks
+    \item If HCM call takes 5 seconds, lock held for 5 seconds
+    \item Bottleneck under load
+\end{itemize}
+
+\textbf{Recommendation:} Not suitable; optimistic locking preferred.
+
+\subsection{Alternative 3: Event-Driven Only Reconciliation}
+
+\textbf{Approach:} Rely solely on HCM event notifications; no scheduled reconciliation.
+
+\textbf{Pros:}
+\begin{itemize}
+    \item Real-time updates
+    \item No background processing
+\end{itemize}
+
+\textbf{Cons:}
+\begin{itemize}
+    \item If event notification lost: Stale balance forever
+    \item No recovery mechanism
+    \item Network unreliability not addressed
+\end{itemize}
+
+\textbf{Recommendation:} Use events + scheduled backup; proposed solution is better.
+
+\subsection{Alternative 4: Timestamp-Based Idempotency}
+
+\textbf{Approach:} Use (source, timestamp, employeeId) as idempotency key.
+
+\textbf{Pros:}
+\begin{itemize}
+    \item Small key size
+\end{itemize}
+
+\textbf{Cons:}
+\begin{itemize}
+    \item Not deterministic (different clock skews)
+    \item Hard to validate across systems
+    \item Cannot detect tampering (data modification in flight)
+\end{itemize}
+
+\textbf{Recommendation:} Hash-based approach is superior.
+
+\subsection{Alternative 5: Eventual Consistency with Conflict Resolution}
+
+\textbf{Approach:} Allow conflicting states; resolve asynchronously.
+
+\textbf{Pros:}
+\begin{itemize}
+    \item Higher availability
+    \item Better distributed system properties
+\end{itemize}
+
+\textbf{Cons:}
+\begin{itemize}
+    \item Employee might approve leave that becomes insufficient
+    \item Poor user experience
+    \item Compliance risk (overselling leave)
+\end{itemize}
+
+\textbf{Recommendation:} Not suitable for financial/compliance domain; strong consistency preferred.
+
+\newpage
+
+\section{Security Considerations}
+
+\subsection{Authentication \& Authorization}
+
+\begin{itemize}
+    \item \textbf{HCM Endpoints:} HMAC-SHA256 signature validation
+    \item \textbf{Employee Endpoints:} Assume client authentication (delegated to API gateway)
+    \item \textbf{No Hardcoded Secrets:} All secrets from environment variables
+\end{itemize}
+
+\subsection{Input Validation}
+
+\begin{itemize}
+    \item \textbf{DTOs:} class-validator for runtime validation
+    \item \textbf{Whitelist Mode:} Reject unknown fields
+    \item \textbf{Type Coercion:} Automatic transformation
+    \item \textbf{Date Format:} ISO 8601 enforcement
+\end{itemize}
+
+\subsection{Data Protection}
+
+\begin{itemize}
+    \item \textbf{Audit Log:} Immutable (append-only)
+    \item \textbf{No Deletion:} Historical records preserved
+    \item \textbf{Encryption at Rest:} Delegated to hosting platform
+    \item \textbf{Encryption in Transit:} HTTPS required in production
+\end{itemize}
+
+\subsection{Error Handling}
+
+\begin{itemize}
+    \item \textbf{No Stack Traces:} Returned to client (logged internally)
+    \item \textbf{Specific Error Codes:} Indicate failure reason
+    \item \textbf{Rate Limiting:} Implement per-endpoint (not shown in TRD)
+\end{itemize}
+
+\newpage
+
+\section{Testing Strategy}
+
+\subsection{Test Coverage Goals}
+
+\begin{itemize}
+    \item \textbf{Unit Tests:} Service logic, edge cases, error handling
+    \item \textbf{Integration Tests:} Database interactions, module communication
+    \item \textbf{E2E Tests:} Full workflows, system behavior
+    \item \textbf{Target Coverage:} 90\% lines, 85\% branches
+\end{itemize}
+
+\subsection{Critical Test Scenarios}
+
+\begin{enumerate}
+    \item \textbf{Happy Path:} Create → Approve → Cancel workflow
+    \item \textbf{Concurrency:} Multiple simultaneous requests on same balance
+    \item \textbf{HCM Failure:} Submission fails, retry mechanism
+    \item \textbf{Balance Change:} HCM updates balance mid-workflow
+    \item \textbf{Anniversary Event:} Bonus received, PENDING requests validation
+    \item \textbf{Idempotency:} Duplicate batch syncs produce same result
+    \item \textbf{HMAC Validation:} Invalid signatures rejected
+    \item \textbf{Reconciliation:} Stale balances synced correctly
+\end{enumerate}
+
+\subsection{Mock HCM Server}
+
+\begin{itemize}
+    \item \textbf{Purpose:} Simulate HCM behavior in tests
+    \item \textbf{Capabilities:}
+    \begin{itemize}
+        \item Store and retrieve balances
+        \item Simulate timeout/failure scenarios
+        \item Generate batch exports
+        \item Process anniversary/reset events
+    \end{itemize}
+    \item \textbf{Implementation:} NestJS controller in separate app
+\end{itemize}
+
+\newpage
+
+\section{Deployment \& Operations}
+
+\subsection{Environment Configuration}
+
+\begin{lstlisting}
+# HCM Integration
+HCM_BASE_URL=https://hcm.company.com
+HCM_BATCH_SECRET=<secret-key>
+HCM_TIMEOUT_MS=5000
+
+# Database
+DB_PATH=./data/timeoff.sqlite
+
+# Sync Strategy
+SYNC_ON_APPROVE=true
+RECONCILE_CRON=0 */6 * * *  # Every 6 hours
+OPTIMISTIC_LOCK_RETRIES=10
+
+# Server
+PORT=3000
+NODE_ENV=production
+\end{lstlisting}
+
+\subsection{Monitoring \& Observability}
+
+\begin{itemize}
+    \item \textbf{Health Endpoint:} GET /health
+    \item \textbf{Structured Logging:} JSON format for aggregation
+    \item \textbf{Metrics:} Request count, error rate, sync duration
+    \item \textbf{Alerts:} HCM failures, high concurrency conflicts
+\end{itemize}
+
+\subsection{Backup \& Recovery}
+
+\begin{itemize}
+    \item \textbf{Database Backup:} SQLite file backup every 6 hours
+    \item \textbf{Point-in-Time Recovery:} Via audit log replay
+    \item \textbf{Audit Log Retention:} 7 years (compliance)
+\end{itemize}
+
+\newpage
+
+\section{Performance Considerations}
+
+\subsection{Expected Throughput}
+
+\begin{itemize}
+    \item \textbf{Request Creation:} 1,000+ per minute (I/O bound)
+    \item \textbf{Approval:} 100+ per minute (HCM API latency)
+    \item \textbf{Batch Sync:} 10,000+ balances per batch
+\end{itemize}
+
+\subsection{Database Optimization}
+
+\begin{itemize}
+    \item \textbf{Indexes:}
+    \begin{itemize}
+        \item UNIQUE(employeeId, locationId, leaveType) on balance
+        \item Index on lastSyncedAt for reconciliation query
+    \end{itemize}
+    \item \textbf{Query Optimization:} N+1 joins avoided
+    \item \textbf{Connection Pooling:} TypeORM manages automatically
+\end{itemize}
+
+\section{Conclusion}
+
+The ReadyOn Time-Off Microservice implements a production-ready solution to the complex problem of maintaining balance synchronization between ReadyOn and HCM systems. By combining defensive validation, idempotent operations, optimistic locking, and scheduled reconciliation, the system ensures data consistency and reliability even in the face of network failures, concurrent operations, and independent HCM updates.
+
+Key design decisions favor maintainability, performance, and correctness over perfect optimization, making the system suitable for enterprise deployment.
+
+\end{document}
