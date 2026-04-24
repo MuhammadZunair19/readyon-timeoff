@@ -44,7 +44,7 @@ export class BalanceService {
   getAllBalances(): Array<{ employeeId: string; locationId: string; leaveType: string; totalDays: number; usedDays: number }> {
     const result = [];
     for (const [key, balance] of this.balances.entries()) {
-      const [employeeId, locationId, leaveType] = key.split('/');
+      const [employeeId, locationId, leaveType] = key.split('/') as [string, string, string];
       result.push({
         employeeId,
         locationId,
