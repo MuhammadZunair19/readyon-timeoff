@@ -6,6 +6,7 @@
     "module": "commonjs",
     "moduleResolution": "node",
     "lib": ["ES2022"],
+    "types": ["jest", "node"],
     "declaration": false,
     "sourceMap": true,
     "incremental": true,
