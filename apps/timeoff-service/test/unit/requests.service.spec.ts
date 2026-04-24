@@ -203,5 +203,167 @@ describe('RequestsService (Unit)', () => {
 
       expect(result).toEqual([mockRequest]);
     });
+
+    it('should filter requests by employeeId only', async () => {
+      const req1 = { ...mockRequest, employeeId: 'E001' };
+      const req2 = { ...mockRequest, employeeId: 'E002' };
+      
+      jest.spyOn(requestRepository, 'createQueryBuilder').mockReturnValue({
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([req1]),
+      } as any);
+
+      const result = await service.listRequests({
+        employeeId: 'E001',
+      });
+
+      expect(result).toHaveLength(1);
+      expect(result[0].employeeId).toBe('E001');
+    });
+
+    it('should filter requests by status only', async () => {
+      const approvedReq = { ...mockRequest, status: TimeOffRequestStatus.APPROVED };
+      
+      jest.spyOn(requestRepository, 'createQueryBuilder').mockReturnValue({
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        getMany: jest.fn().mockResolvedValue([approvedReq]),
+      } as any);
+
+      const result = await service.listRequests({
+        status: TimeOffRequestStatus.APPROVED,
+      });
+
+      expect(result).toHaveLength(1);
+      expect(result[0].status).toBe(TimeOffRequestStatus.APPROVED);
+    });
+  });
+
+  describe('Edge Cases - Concurrent Operations', () => {
+    it('should not allow double cancellation', async () => {
+      const cancelledRequest = { ...mockRequest, status: TimeOffRequestStatus.CANCELLED };
+      jest.spyOn(requestRepository, 'findOne').mockResolvedValue(cancelledRequest);
+      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
+        const cb = typeof args[0] === 'function' ? args[0] : args[1];
+        return cb({});
+      });
+
+      await expect(service.cancelRequest('request-1')).rejects.toThrow(
+        InvalidStateTransitionException,
+      );
+    });
+
+    it('should not allow approval of cancelled request', async () => {
+      const cancelledRequest = { ...mockRequest, status: TimeOffRequestStatus.CANCELLED };
+      jest.spyOn(requestRepository, 'findOne').mockResolvedValue(cancelledRequest);
+      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
+        const cb = typeof args[0] === 'function' ? args[0] : args[1];
+        return cb({});
+      });
+
+      await expect(service.approveRequest('request-1', { managerId: 'MGR-001' })).rejects.toThrow(
+        InvalidStateTransitionException,
+      );
+    });
+
+    it('should handle HCM timeout during approval gracefully', async () => {
+      jest.spyOn(requestRepository, 'findOne').mockResolvedValue(mockRequest);
+      jest.spyOn(balanceService, 'getBalance').mockResolvedValue({
+        employeeId: 'E001',
+        locationId: 'NYC',
+        leaveType: 'ANNUAL',
+        totalDays: 20,
+        usedDays: 5,
+        pendingDays: 0,
+        lastSyncedAt: new Date(),
+        version: 1,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        availableDays: 15,
+      });
+
+      hcmAdapter.fileTimeOff = jest.fn().mockRejectedValue(new Error('ETIMEDOUT'));
+
+      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
+        const cb = typeof args[0] === 'function' ? args[0] : args[1];
+        return cb({
+          findOne: jest.fn().mockResolvedValue(mockRequest),
+          save: jest.fn(),
+          update: jest.fn(),
+        });
+      });
+
+      const result = await service.approveRequest('request-1', { managerId: 'MGR-001' });
+
+      expect(result.status).toBe(TimeOffRequestStatus.HCM_FAILED);
+    });
+
+    it('should not approve request if HCM rejects it', async () => {
+      jest.spyOn(requestRepository, 'findOne').mockResolvedValue(mockRequest);
+      jest.spyOn(balanceService, 'getBalance').mockResolvedValue({
+        employeeId: 'E001',
+        locationId: 'NYC',
+        leaveType: 'ANNUAL',
+        totalDays: 20,
+        usedDays: 5,
+        pendingDays: 0,
+        lastSyncedAt: new Date(),
+        version: 1,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        availableDays: 15,
+      });
+
+      hcmAdapter.fileTimeOff = jest
+        .fn()
+        .mockResolvedValue({ status: 'REJECTED', rejectionReason: 'Employee on leave' });
+
+      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
+        const cb = typeof args[0] === 'function' ? args[0] : args[1];
+        return cb({
+          findOne: jest.fn().mockResolvedValue(mockRequest),
+          save: jest.fn(),
+          update: jest.fn(),
+        });
+      });
+
+      const result = await service.approveRequest('request-1', { managerId: 'MGR-001' });
+
+      expect(result.status).toBe(TimeOffRequestStatus.HCM_FAILED);
+    });
+  });
+
+  describe('Edge Cases - Request Cancellation', () => {
+    it('should cancel approved request with HCM reversal', async () => {
+      const approvedRequest = {
+        ...mockRequest,
+        status: TimeOffRequestStatus.APPROVED,
+        hcmTransactionId: 'TXN-123',
+      };
+
+      jest.spyOn(requestRepository, 'findOne').mockResolvedValue(approvedRequest);
+      jest.spyOn(requestRepository, 'save').mockResolvedValue({
+        ...approvedRequest,
+        status: TimeOffRequestStatus.CANCELLED,
+      });
+
+      hcmAdapter.reverseTimeOff = jest.fn().mockResolvedValue(undefined);
+      jest.spyOn(balanceService, 'releasePendingDays').mockResolvedValue({} as any);
+      jest.spyOn(auditService, 'log').mockResolvedValue({} as any);
+
+      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
+        const cb = typeof args[0] === 'function' ? args[0] : args[1];
+        return cb({});
+      });
+
+      const result = await service.cancelRequest('request-1');
+
+      expect(result.status).toBe(TimeOffRequestStatus.CANCELLED);
+      expect(hcmAdapter.reverseTimeOff).toHaveBeenCalledWith('TXN-123');
+    });
   });
 });
+
