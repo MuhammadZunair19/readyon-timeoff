@@ -220,7 +220,7 @@ describe('RequestsService (Unit)', () => {
       });
 
       expect(result).toHaveLength(1);
-      expect(result[0].employeeId).toBe('E001');
+      expect(result[0]!.employeeId).toBe('E001');
     });
 
     it('should filter requests by status only', async () => {
@@ -238,7 +238,7 @@ describe('RequestsService (Unit)', () => {
       });
 
       expect(result).toHaveLength(1);
-      expect(result[0].status).toBe(TimeOffRequestStatus.APPROVED);
+      expect(result[0]!.status).toBe(TimeOffRequestStatus.APPROVED);
     });
   });
 
