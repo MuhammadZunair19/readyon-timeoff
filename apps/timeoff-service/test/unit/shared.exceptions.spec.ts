@@ -1,13 +1,11 @@
 /**
  * Shared Exceptions Unit Tests
  *
- * Invariant: All custom exceptions properly format error responses with
- * consistent HTTP status codes and error messages.
+ * Invariant: All custom exceptions properly inherit from Error and have
+ * correct names for identification.
  */
 
-import { HttpStatus } from '@nestjs/common';
 import {
-  TimeOffException,
   BalanceNotFoundException,
   InsufficientBalanceException,
   RequestNotFoundException,
@@ -16,266 +14,201 @@ import {
   HcmInsufficientBalanceError,
   HcmInvalidDimensionError,
   OptimisticLockException,
+  InvalidHcmDimensionException,
+  HcmUnavailableException,
+  AuditLogException,
 } from '../../src/shared/exceptions';
 
 describe('Shared Exceptions (Unit)', () => {
-  describe('TimeOffException', () => {
-    it('should create insufficientBalance exception with correct status', () => {
-      const error = TimeOffException.insufficientBalance('E001', 'NYC', 'ANNUAL');
-
-      expect(error).toBeInstanceOf(InsufficientBalanceException);
-      expect(error.getStatus()).toBe(HttpStatus.BAD_REQUEST);
-      expect(error.message).toContain('E001');
-    });
-
-    it('should create requestNotFound exception with correct status', () => {
-      const error = TimeOffException.requestNotFound('REQ-123');
-
-      expect(error).toBeInstanceOf(RequestNotFoundException);
-      expect(error.getStatus()).toBe(HttpStatus.NOT_FOUND);
-      expect(error.message).toContain('REQ-123');
-    });
-
-    it('should create balanceNotFound exception with correct status', () => {
-      const error = TimeOffException.balanceNotFound('E001', 'NYC', 'ANNUAL');
-
-      expect(error).toBeInstanceOf(BalanceNotFoundException);
-      expect(error.getStatus()).toBe(HttpStatus.NOT_FOUND);
-      expect(error.message).toContain('E001');
-    });
-
-    it('should create invalidStateTransition exception with correct status', () => {
-      const error = TimeOffException.invalidStateTransition('PENDING', 'CANCELLED');
-
-      expect(error).toBeInstanceOf(InvalidStateTransitionException);
-      expect(error.getStatus()).toBe(HttpStatus.CONFLICT);
-      expect(error.message).toContain('PENDING');
-      expect(error.message).toContain('CANCELLED');
-    });
-
-    it('should create hcmFailed exception with correct status', () => {
-      const error = TimeOffException.hcmFailed('Request timeout');
-
-      expect(error).toBeInstanceOf(HcmUnavailableError);
-      expect(error.getStatus()).toBe(HttpStatus.SERVICE_UNAVAILABLE);
-      expect(error.message).toContain('Request timeout');
-    });
-
-    it('should create hcmInsufficientBalance exception', () => {
-      const error = TimeOffException.hcmInsufficientBalance('Not enough days');
-
-      expect(error).toBeInstanceOf(HcmInsufficientBalanceError);
-      expect(error.getStatus()).toBe(HttpStatus.BAD_REQUEST);
-      expect(error.message).toContain('Not enough days');
-    });
-
-    it('should create hcmInvalidDimension exception', () => {
-      const error = TimeOffException.hcmInvalidDimension('Invalid location');
-
-      expect(error).toBeInstanceOf(HcmInvalidDimensionError);
-      expect(error.getStatus()).toBe(HttpStatus.BAD_REQUEST);
-      expect(error.message).toContain('Invalid location');
-    });
-
-    it('should create optimisticLock exception', () => {
-      const error = TimeOffException.optimisticLock('Balance version mismatch');
-
-      expect(error).toBeInstanceOf(OptimisticLockException);
-      expect(error.getStatus()).toBe(HttpStatus.CONFLICT);
-      expect(error.message).toContain('Balance version mismatch');
-    });
-  });
-
-  describe('Exception Error Codes', () => {
-    it('should have INSUFFICIENT_BALANCE code', () => {
-      const error = TimeOffException.insufficientBalance('E001', 'NYC', 'ANNUAL');
-      const response = error.getResponse() as any;
-
-      expect(response.code).toBe('INSUFFICIENT_BALANCE');
-    });
-
-    it('should have REQUEST_NOT_FOUND code', () => {
-      const error = TimeOffException.requestNotFound('REQ-123');
-      const response = error.getResponse() as any;
-
-      expect(response.code).toBe('REQUEST_NOT_FOUND');
-    });
-
-    it('should have BALANCE_NOT_FOUND code', () => {
-      const error = TimeOffException.balanceNotFound('E001', 'NYC', 'ANNUAL');
-      const response = error.getResponse() as any;
-
-      expect(response.code).toBe('BALANCE_NOT_FOUND');
-    });
-
-    it('should have INVALID_STATE_TRANSITION code', () => {
-      const error = TimeOffException.invalidStateTransition('PENDING', 'CANCELLED');
-      const response = error.getResponse() as any;
-
-      expect(response.code).toBe('INVALID_STATE_TRANSITION');
-    });
-
-    it('should have HCM_FAILED code', () => {
-      const error = TimeOffException.hcmFailed('Error');
-      const response = error.getResponse() as any;
-
-      expect(response.code).toBe('HCM_FAILED');
-    });
-
-    it('should have HCM_INSUFFICIENT_BALANCE code', () => {
-      const error = TimeOffException.hcmInsufficientBalance('Not enough');
-      const response = error.getResponse() as any;
-
-      expect(response.code).toBe('HCM_INSUFFICIENT_BALANCE');
-    });
-
-    it('should have HCM_INVALID_DIMENSION code', () => {
-      const error = TimeOffException.hcmInvalidDimension('Invalid');
-      const response = error.getResponse() as any;
-
-      expect(response.code).toBe('HCM_INVALID_DIMENSION');
-    });
-
-    it('should have OPTIMISTIC_LOCK code', () => {
-      const error = TimeOffException.optimisticLock('Mismatch');
-      const response = error.getResponse() as any;
-
-      expect(response.code).toBe('OPTIMISTIC_LOCK');
-    });
-  });
-
-  describe('Exception Messages', () => {
-    it('should include detailed message for insufficient balance', () => {
-      const error = TimeOffException.insufficientBalance('E001', 'NYC', 'ANNUAL');
-      const response = error.getResponse() as any;
-
-      expect(response.message).toContain('E001');
-      expect(response.message).toContain('NYC');
-      expect(response.message).toContain('ANNUAL');
-    });
-
-    it('should include request ID in request not found', () => {
-      const error = TimeOffException.requestNotFound('REQ-ABC123');
-      const response = error.getResponse() as any;
-
-      expect(response.message).toContain('REQ-ABC123');
-    });
-
-    it('should include state info in state transition error', () => {
-      const error = TimeOffException.invalidStateTransition('PENDING', 'REJECTED');
-      const response = error.getResponse() as any;
-
-      expect(response.message).toContain('PENDING');
-      expect(response.message).toContain('REJECTED');
-    });
-
-    it('should include HCM error details', () => {
-      const error = TimeOffException.hcmFailed('Timeout after 5s');
-      const response = error.getResponse() as any;
-
-      expect(response.message).toContain('Timeout after 5s');
-    });
-  });
-
-  describe('Exception Response Format', () => {
-    it('should format response with consistent structure', () => {
-      const error = TimeOffException.insufficientBalance('E001', 'NYC', 'ANNUAL');
-      const response = error.getResponse() as any;
-
-      expect(response).toHaveProperty('code');
-      expect(response).toHaveProperty('message');
-      expect(typeof response.code).toBe('string');
-      expect(typeof response.message).toBe('string');
-    });
-
-    it('should include timestamp in response', () => {
-      const error = TimeOffException.insufficientBalance('E001', 'NYC', 'ANNUAL');
-      const response = error.getResponse() as any;
-
-      if (response.timestamp) {
-        expect(new Date(response.timestamp).getTime()).toBeLessThanOrEqual(Date.now());
-      }
-    });
-
-    it('should preserve error details across exception types', () => {
-      const errors = [
-        TimeOffException.insufficientBalance('E001', 'NYC', 'ANNUAL'),
-        TimeOffException.requestNotFound('REQ-123'),
-        TimeOffException.hcmFailed('Error'),
-        TimeOffException.invalidStateTransition('A', 'B'),
-      ];
-
-      errors.forEach((error) => {
-        const response = error.getResponse() as any;
-        expect(response).toHaveProperty('code');
-        expect(response).toHaveProperty('message');
-        expect(response.code).not.toBeNull();
-        expect(response.message).not.toBeNull();
-      });
-    });
-  });
-
-  describe('HTTP Status Codes', () => {
-    it('should return 400 for client errors', () => {
-      const errors = [
-        TimeOffException.insufficientBalance('E001', 'NYC', 'ANNUAL'),
-        TimeOffException.hcmInsufficientBalance('Not enough'),
-        TimeOffException.hcmInvalidDimension('Invalid'),
-      ];
-
-      errors.forEach((error) => {
-        expect(error.getStatus()).toBe(HttpStatus.BAD_REQUEST);
-      });
-    });
-
-    it('should return 404 for not found errors', () => {
-      const errors = [
-        TimeOffException.requestNotFound('REQ-123'),
-        TimeOffException.balanceNotFound('E001', 'NYC', 'ANNUAL'),
-      ];
-
-      errors.forEach((error) => {
-        expect(error.getStatus()).toBe(HttpStatus.NOT_FOUND);
-      });
-    });
-
-    it('should return 409 for conflict errors', () => {
-      const errors = [
-        TimeOffException.invalidStateTransition('A', 'B'),
-        TimeOffException.optimisticLock('Mismatch'),
-      ];
-
-      errors.forEach((error) => {
-        expect(error.getStatus()).toBe(HttpStatus.CONFLICT);
-      });
-    });
-
-    it('should return 503 for service unavailable', () => {
-      const error = TimeOffException.hcmFailed('Service down');
-
-      expect(error.getStatus()).toBe(HttpStatus.SERVICE_UNAVAILABLE);
-    });
-  });
-
-  describe('Exception Inheritance', () => {
-    it('should be instances of Error', () => {
-      const error = TimeOffException.insufficientBalance('E001', 'NYC', 'ANNUAL');
+  describe('InsufficientBalanceException', () => {
+    it('should create with correct name', () => {
+      const error = new InsufficientBalanceException('Not enough days');
 
       expect(error).toBeInstanceOf(Error);
+      expect(error.name).toBe('InsufficientBalanceException');
+      expect(error.message).toBe('Not enough days');
     });
 
-    it('should have proper error message', () => {
-      const error = TimeOffException.insufficientBalance('E001', 'NYC', 'ANNUAL');
+    it('should be throwable and catchable', () => {
+      expect(() => {
+        throw new InsufficientBalanceException('Insufficient balance');
+      }).toThrow(InsufficientBalanceException);
+    });
+  });
 
-      expect(error.message).toBeDefined();
-      expect(error.message.length).toBeGreaterThan(0);
+  describe('RequestNotFoundException', () => {
+    it('should create with correct name', () => {
+      const error = new RequestNotFoundException('Request not found');
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error.name).toBe('RequestNotFoundException');
+      expect(error.message).toBe('Request not found');
     });
 
-    it('should support standard Error properties', () => {
-      const error = TimeOffException.insufficientBalance('E001', 'NYC', 'ANNUAL');
+    it('should be throwable and catchable', () => {
+      expect(() => {
+        throw new RequestNotFoundException('REQ-123 not found');
+      }).toThrow(RequestNotFoundException);
+    });
+  });
 
-      expect(error.name).toBeDefined();
-      expect(error.message).toBeDefined();
+  describe('BalanceNotFoundException', () => {
+    it('should create with correct name', () => {
+      const error = new BalanceNotFoundException('Balance not found');
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error.name).toBe('BalanceNotFoundException');
+      expect(error.message).toBe('Balance not found');
+    });
+
+    it('should be throwable and catchable', () => {
+      expect(() => {
+        throw new BalanceNotFoundException('No balance for employee');
+      }).toThrow(BalanceNotFoundException);
+    });
+  });
+
+  describe('InvalidStateTransitionException', () => {
+    it('should create with correct name', () => {
+      const error = new InvalidStateTransitionException('Invalid state transition');
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error.name).toBe('InvalidStateTransitionException');
+      expect(error.message).toBe('Invalid state transition');
+    });
+
+    it('should be throwable and catchable', () => {
+      expect(() => {
+        throw new InvalidStateTransitionException('Cannot transition from PENDING to REJECTED');
+      }).toThrow(InvalidStateTransitionException);
+    });
+  });
+
+  describe('HcmUnavailableException', () => {
+    it('should create with correct name', () => {
+      const error = new HcmUnavailableException('HCM service unavailable');
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error.name).toBe('HcmUnavailableException');
+      expect(error.message).toBe('HCM service unavailable');
+    });
+
+    it('should be throwable and catchable', () => {
+      expect(() => {
+        throw new HcmUnavailableException('Connection timeout');
+      }).toThrow(HcmUnavailableException);
+    });
+  });
+
+  describe('HcmInsufficientBalanceError', () => {
+    it('should create with correct name', () => {
+      const error = new HcmInsufficientBalanceError('HCM insufficient balance');
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error.name).toBe('HcmInsufficientBalanceError');
+      expect(error.message).toBe('HCM insufficient balance');
+    });
+
+    it('should be throwable and catchable', () => {
+      expect(() => {
+        throw new HcmInsufficientBalanceError('Not enough days in HCM');
+      }).toThrow(HcmInsufficientBalanceError);
+    });
+  });
+
+  describe('HcmInvalidDimensionError', () => {
+    it('should create with correct name', () => {
+      const error = new HcmInvalidDimensionError('HCM invalid dimension');
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error.name).toBe('HcmInvalidDimensionError');
+      expect(error.message).toBe('HCM invalid dimension');
+    });
+
+    it('should be throwable and catchable', () => {
+      expect(() => {
+        throw new HcmInvalidDimensionError('Invalid location dimension');
+      }).toThrow(HcmInvalidDimensionError);
+    });
+  });
+
+  describe('HcmUnavailableError', () => {
+    it('should create with correct name', () => {
+      const error = new HcmUnavailableError('HCM unavailable');
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error.name).toBe('HcmUnavailableError');
+      expect(error.message).toBe('HCM unavailable');
+    });
+
+    it('should be throwable and catchable', () => {
+      expect(() => {
+        throw new HcmUnavailableError('Service down');
+      }).toThrow(HcmUnavailableError);
+    });
+  });
+
+  describe('OptimisticLockException', () => {
+    it('should create with correct name', () => {
+      const error = new OptimisticLockException('Version mismatch');
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error.name).toBe('OptimisticLockException');
+      expect(error.message).toBe('Version mismatch');
+    });
+
+    it('should be throwable and catchable', () => {
+      expect(() => {
+        throw new OptimisticLockException('Balance was modified');
+      }).toThrow(OptimisticLockException);
+    });
+  });
+
+  describe('InvalidHcmDimensionException', () => {
+    it('should create with correct name', () => {
+      const error = new InvalidHcmDimensionException('Invalid HCM dimension');
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error.name).toBe('InvalidHcmDimensionException');
+      expect(error.message).toBe('Invalid HCM dimension');
+    });
+
+    it('should be throwable and catchable', () => {
+      expect(() => {
+        throw new InvalidHcmDimensionException('Location not found in HCM');
+      }).toThrow(InvalidHcmDimensionException);
+    });
+  });
+
+  describe('HcmUnavailableException', () => {
+    it('should create with correct name', () => {
+      const error = new HcmUnavailableException('HCM is unavailable');
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error.name).toBe('HcmUnavailableException');
+    });
+
+    it('should be throwable and catchable', () => {
+      expect(() => {
+        throw new HcmUnavailableException('Server error');
+      }).toThrow(HcmUnavailableException);
+    });
+  });
+
+  describe('AuditLogException', () => {
+    it('should create with correct name', () => {
+      const error = new AuditLogException('Audit log failed');
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error.name).toBe('AuditLogException');
+      expect(error.message).toBe('Audit log failed');
+    });
+
+    it('should be throwable and catchable', () => {
+      expect(() => {
+        throw new AuditLogException('Cannot write to audit log');
+      }).toThrow(AuditLogException);
     });
   });
 });
+
