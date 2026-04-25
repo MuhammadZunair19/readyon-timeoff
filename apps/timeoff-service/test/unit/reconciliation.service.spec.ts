@@ -156,3 +156,98 @@ describe('ReconciliationService (Unit)', () => {
     });
   });
 });
+
+import { SyncService } from '../../src/sync/sync.service';
+
+describe('ReconciliationService (Implementation Unit)', () => {
+  let reconciliationService: ReconciliationService;
+  let balanceRepository: jest.Mocked<Repository<LeaveBalanceEntity>>;
+  let syncService: jest.Mocked<SyncService>;
+
+  beforeEach(async () => {
+    const mockBalanceRepo = {
+      find: jest.fn(),
+    };
+
+    const mockSyncService = {
+      pullBalance: jest.fn(),
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        ReconciliationService,
+        {
+          provide: getRepositoryToken(LeaveBalanceEntity),
+          useValue: mockBalanceRepo,
+        },
+        {
+          provide: SyncService,
+          useValue: mockSyncService,
+        },
+      ],
+    }).compile();
+
+    reconciliationService = module.get<ReconciliationService>(ReconciliationService);
+    balanceRepository = module.get(getRepositoryToken(LeaveBalanceEntity)) as any;
+    syncService = module.get(SyncService) as any;
+  });
+
+  describe('reconcileStaleBalances', () => {
+    it('should return empty result if no stale balances', async () => {
+      balanceRepository.find.mockResolvedValue([]);
+      
+      const result = await reconciliationService.reconcileStaleBalances();
+      
+      expect(result.checked).toBe(0);
+      expect(result.updated).toBe(0);
+      expect(result.errors).toEqual([]);
+    });
+
+    it('should sync balances and report updates', async () => {
+      balanceRepository.find.mockResolvedValue([
+        { employeeId: 'E1', locationId: 'L1', leaveType: 'ANNUAL', totalDays: 10, usedDays: 2 } as any,
+        { employeeId: 'E2', locationId: 'L2', leaveType: 'SICK', totalDays: 5, usedDays: 1 } as any,
+      ]);
+
+      // First balance changes, second stays the same
+      syncService.pullBalance.mockResolvedValueOnce({ totalDays: 15, usedDays: 2 } as any)
+                             .mockResolvedValueOnce({ totalDays: 5, usedDays: 1 } as any);
+
+      const result = await reconciliationService.reconcileStaleBalances();
+      
+      expect(result.checked).toBe(2);
+      expect(result.updated).toBe(1);
+      expect(result.errors).toEqual([]);
+    });
+
+    it('should handle errors for individual balances and continue', async () => {
+      balanceRepository.find.mockResolvedValue([
+        { employeeId: 'E1', locationId: 'L1', leaveType: 'ANNUAL', totalDays: 10, usedDays: 2 } as any,
+        { employeeId: 'E2', locationId: 'L2', leaveType: 'SICK', totalDays: 5, usedDays: 1 } as any,
+      ]);
+
+      syncService.pullBalance.mockRejectedValueOnce(new Error('HCM Sync Failed'))
+                             .mockResolvedValueOnce({ totalDays: 5, usedDays: 2 } as any); // changed
+
+      const result = await reconciliationService.reconcileStaleBalances();
+      
+      expect(result.checked).toBe(2);
+      expect(result.updated).toBe(1);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]).toContain('Failed to sync balance for E1/L1/ANNUAL: HCM Sync Failed');
+    });
+
+    it('should handle non-Error objects thrown during sync', async () => {
+      balanceRepository.find.mockResolvedValue([
+        { employeeId: 'E1', locationId: 'L1', leaveType: 'ANNUAL', totalDays: 10, usedDays: 2 } as any,
+      ]);
+
+      syncService.pullBalance.mockRejectedValueOnce('Some string error');
+
+      const result = await reconciliationService.reconcileStaleBalances();
+      
+      expect(result.checked).toBe(1);
+      expect(result.errors[0]).toContain('Some string error');
+    });
+  });
+});
