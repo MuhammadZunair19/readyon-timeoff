@@ -138,5 +138,23 @@ describe('HealthController (Unit)', () => {
 
       expect(result.checks).toBeDefined();
     });
+
+    it('should fallback to Unknown error if error has no message for db', async () => {
+      dataSource.query.mockRejectedValue({});
+      hcmAdapter.getBatchBalances.mockResolvedValue([]);
+
+      const result = await controller.check();
+
+      expect(result.checks.database.message).toBe('Unknown error');
+    });
+
+    it('should fallback to Unknown error if error has no message for hcm', async () => {
+      dataSource.query.mockResolvedValue([{ version: '3' }]);
+      hcmAdapter.getBatchBalances.mockRejectedValue({});
+
+      const result = await controller.check();
+
+      expect(result.checks.hcm.message).toBe('Unknown error');
+    });
   });
 });
