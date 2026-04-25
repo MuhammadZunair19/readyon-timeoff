@@ -339,5 +339,70 @@ describe('BalanceService (Unit)', () => {
 
       expect(result.changed).toBe(false);
     });
+  describe('Missing Coverage Scenarios', () => {
+    it('getBalance: should throw BalanceNotFoundException if balances array is empty', async () => {
+      jest.spyOn(repository, 'find').mockResolvedValue([]);
+      await expect(service.getBalance('E1', 'L1')).rejects.toThrow(BalanceNotFoundException);
+    });
+
+    it('reservePendingDays: should handle balance.version == null', async () => {
+      const bWithoutVersion = { ...mockBalance, version: null as unknown as number };
+      jest.spyOn(repository, 'findOne').mockResolvedValue(bWithoutVersion as any);
+      jest.spyOn(repository, 'findOneOrFail').mockResolvedValue({ ...bWithoutVersion, pendingDays: 5, version: 1 } as any);
+      const execute = jest.fn().mockResolvedValue({ affected: 1 });
+      const qb = {
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        execute,
+      };
+      jest.spyOn(repository, 'createQueryBuilder').mockReturnValue(qb as any);
+      
+      await service.reservePendingDays('E1', 'L1', 'ANNUAL', 2, 'R1');
+      expect(qb.andWhere).toHaveBeenCalledWith('version IS NULL');
+    });
+
+    it('reservePendingDays: should re-throw generic errors immediately', async () => {
+      jest.spyOn(repository, 'findOne').mockRejectedValue(new Error('DB Connection Error'));
+      await expect(service.reservePendingDays('E1', 'L1', 'ANNUAL', 2, 'R1')).rejects.toThrow('DB Connection Error');
+    });
+
+    it('decrementUsedDays: should decrement used days', async () => {
+      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
+        const cb = typeof args[0] === 'function' ? args[0] : args[1];
+        const manager = {
+          findOne: jest.fn().mockResolvedValue({ ...mockBalance } as any),
+          save: jest.fn().mockImplementation((e: any) => Promise.resolve(e)),
+        };
+        return cb(manager);
+      });
+      const res = await service.decrementUsedDays('E1', 'L1', 'ANNUAL', 2);
+      expect(res.usedDays).toBe(3);
+    });
+
+    it('decrementUsedDays: should throw BalanceNotFoundException if balance not found', async () => {
+      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
+        const cb = typeof args[0] === 'function' ? args[0] : args[1];
+        const manager = {
+          findOne: jest.fn().mockResolvedValue(null),
+        };
+        return cb(manager);
+      });
+      await expect(service.decrementUsedDays('E1', 'L1', 'ANNUAL', 2)).rejects.toThrow(BalanceNotFoundException);
+    });
+
+    it('releasePendingDays: should throw BalanceNotFoundException if balance not found', async () => {
+      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
+        const cb = typeof args[0] === 'function' ? args[0] : args[1];
+        const manager = {
+          findOne: jest.fn().mockResolvedValue(null),
+        };
+        return cb(manager);
+      });
+      await expect(service.releasePendingDays('E1', 'L1', 'ANNUAL', 2)).rejects.toThrow(BalanceNotFoundException);
+    });
+  });
   });
 });
+

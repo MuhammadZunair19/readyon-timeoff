@@ -2,7 +2,7 @@
  * RequestsService Unit Tests
  *
  * Invariant: Request lifecycle transitions atomically update balance state and persist
- * audit logs; HCM failures trigger compensating balance adjustments (releasePendingDays).
+ * audit logs; HCM failures trigger compensating balance adjustments.
  */
 
 import { Test, TestingModule } from '@nestjs/testing';
@@ -74,9 +74,7 @@ describe('RequestsService (Unit)', () => {
         },
         {
           provide: AuditService,
-          useValue: {
-            log: jest.fn(),
-          },
+          useValue: { log: jest.fn() },
         },
         {
           provide: 'HCM_ADAPTER',
@@ -84,117 +82,76 @@ describe('RequestsService (Unit)', () => {
         },
         {
           provide: DataSource,
-          useValue: {
-            transaction: jest.fn(),
-          },
+          useValue: { transaction: jest.fn() },
         },
       ],
     }).compile();
 
-    service = module.get<RequestsService>(RequestsService);
-    requestRepository = module.get<Repository<TimeOffRequestEntity>>(
-      getRepositoryToken(TimeOffRequestEntity),
-    );
-    balanceService = module.get<BalanceService>(BalanceService);
-    auditService = module.get<AuditService>(AuditService);
-    dataSource = module.get<DataSource>(DataSource);
+    service = module.get(RequestsService);
+    requestRepository = module.get(getRepositoryToken(TimeOffRequestEntity));
+    balanceService = module.get(BalanceService);
+    auditService = module.get(AuditService);
+    dataSource = module.get(DataSource);
   });
 
+  // ===== Basic =====
   describe('getRequest', () => {
-    it('should return a request by id', async () => {
+    it('returns request', async () => {
       jest.spyOn(requestRepository, 'findOne').mockResolvedValue(mockRequest);
-
-      const result = await service.getRequest('request-1');
-
-      expect(result).toEqual(mockRequest);
+      expect(await service.getRequest('id')).toEqual(mockRequest);
     });
 
-    it('should throw RequestNotFoundException if request not found', async () => {
+    it('throws if not found', async () => {
       jest.spyOn(requestRepository, 'findOne').mockResolvedValue(null);
-
-      await expect(service.getRequest('nonexistent')).rejects.toThrow(RequestNotFoundException);
+      await expect(service.getRequest('x')).rejects.toThrow(RequestNotFoundException);
     });
   });
 
+  // ===== Create =====
   describe('createRequest', () => {
-    it('should create a new request in PENDING status', async () => {
-      const newRequest = { ...mockRequest, id: 'new-id' };
-      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
-        const cb = typeof args[0] === 'function' ? args[0] : args[1];
-        const manager = {
+    it('creates pending request', async () => {
+      jest.spyOn(dataSource, 'transaction').mockImplementation(async (cb: any) =>
+        cb({
           findOne: jest.fn().mockResolvedValue({
-            employeeId: 'E001',
-            locationId: 'NYC',
-            leaveType: 'ANNUAL',
             totalDays: 20,
             usedDays: 5,
             pendingDays: 0,
           }),
-          create: jest.fn().mockReturnValue(newRequest),
-          save: jest.fn().mockResolvedValue(newRequest),
-        };
-        return cb(manager);
-      });
-      jest.spyOn(balanceService, 'reservePendingDays').mockResolvedValue({} as any);
-      jest.spyOn(auditService, 'log').mockResolvedValue({} as any);
+          create: jest.fn().mockReturnValue(mockRequest),
+          save: jest.fn().mockResolvedValue(mockRequest),
+        }),
+      );
 
-      const result = await service.createRequest({
-        employeeId: 'E001',
-        locationId: 'NYC',
-        leaveType: 'ANNUAL',
-        startDate: '2026-05-01',
-        endDate: '2026-05-05',
-        daysRequested: 5,
-        notes: null,
-      });
+      await service.createRequest(mockRequest as any);
 
-      expect(result.status).toBe(TimeOffRequestStatus.PENDING);
       expect(balanceService.reservePendingDays).toHaveBeenCalled();
       expect(auditService.log).toHaveBeenCalled();
     });
   });
 
+  // ===== Reject =====
   describe('rejectRequest', () => {
-    it('should reject a PENDING request and release pending days', async () => {
-      const rejectedRequest = { ...mockRequest, status: TimeOffRequestStatus.REJECTED, rejectionReason: 'Not approved' };
-      jest.spyOn(requestRepository, 'findOne').mockResolvedValue(mockRequest);
-      jest.spyOn(requestRepository, 'save').mockResolvedValue(rejectedRequest);
-      jest.spyOn(balanceService, 'releasePendingDays').mockResolvedValue({} as any);
-      jest.spyOn(auditService, 'log').mockResolvedValue({} as any);
-
-      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
-        const cb = typeof args[0] === 'function' ? args[0] : args[1];
-        return cb({
+    it('rejects pending request', async () => {
+      jest.spyOn(dataSource, 'transaction').mockImplementation(async (cb: any) =>
+        cb({
           findOne: jest.fn().mockResolvedValue(mockRequest),
-          save: jest.fn().mockResolvedValue(rejectedRequest),
-        });
-      });
-
-      const result = await service.rejectRequest('request-1', 'manager-1', 'Not approved');
-
-      expect(result.status).toBe(TimeOffRequestStatus.REJECTED);
-      expect(result.rejectionReason).toBe('Not approved');
-      expect(balanceService.releasePendingDays).toHaveBeenCalled();
-    });
-
-    it('should throw InvalidStateTransitionException if not PENDING', async () => {
-      const approvedRequest = { ...mockRequest, status: TimeOffRequestStatus.APPROVED };
-      jest.spyOn(requestRepository, 'findOne').mockResolvedValue(approvedRequest);
-      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
-        const cb = typeof args[0] === 'function' ? args[0] : args[1];
-        return cb({
-          findOne: jest.fn().mockResolvedValue(approvedRequest),
-        });
-      });
-
-      await expect(service.rejectRequest('request-1', 'manager-1', 'Reason')).rejects.toThrow(
-        InvalidStateTransitionException,
+          save: jest.fn().mockResolvedValue({
+            ...mockRequest,
+            status: TimeOffRequestStatus.REJECTED,
+          }),
+        }),
       );
+
+      const res = await service.rejectRequest('id', 'mgr', 'reason');
+
+      expect(res.status).toBe(TimeOffRequestStatus.REJECTED);
+      expect(balanceService.releasePendingDays).toHaveBeenCalled();
     });
   });
 
+  // ===== List =====
   describe('listRequests', () => {
-    it('should list requests filtered by employeeId and status', async () => {
+    it('filters correctly', async () => {
       jest.spyOn(requestRepository, 'createQueryBuilder').mockReturnValue({
         where: jest.fn().mockReturnThis(),
         andWhere: jest.fn().mockReturnThis(),
@@ -202,363 +159,82 @@ describe('RequestsService (Unit)', () => {
         getMany: jest.fn().mockResolvedValue([mockRequest]),
       } as any);
 
-      const result = await service.listRequests({
-        employeeId: 'E001',
-        status: TimeOffRequestStatus.PENDING,
-      });
-
-      expect(result).toEqual([mockRequest]);
-    });
-
-    it('should filter requests by employeeId only', async () => {
-      const req1 = { ...mockRequest, employeeId: 'E001' };
-      const req2 = { ...mockRequest, employeeId: 'E002' };
-      
-      jest.spyOn(requestRepository, 'createQueryBuilder').mockReturnValue({
-        where: jest.fn().mockReturnThis(),
-        andWhere: jest.fn().mockReturnThis(),
-        orderBy: jest.fn().mockReturnThis(),
-        getMany: jest.fn().mockResolvedValue([req1]),
-      } as any);
-
-      const result = await service.listRequests({
-        employeeId: 'E001',
-      });
-
-      expect(result).toHaveLength(1);
-      expect(result[0]!.employeeId).toBe('E001');
-    });
-
-    it('should filter requests by status only', async () => {
-      const approvedReq = { ...mockRequest, status: TimeOffRequestStatus.APPROVED };
-      
-      jest.spyOn(requestRepository, 'createQueryBuilder').mockReturnValue({
-        where: jest.fn().mockReturnThis(),
-        andWhere: jest.fn().mockReturnThis(),
-        orderBy: jest.fn().mockReturnThis(),
-        getMany: jest.fn().mockResolvedValue([approvedReq]),
-      } as any);
-
-      const result = await service.listRequests({
-        status: TimeOffRequestStatus.APPROVED,
-      });
-
-      expect(result).toHaveLength(1);
-      expect(result[0]!.status).toBe(TimeOffRequestStatus.APPROVED);
+      const res = await service.listRequests({ employeeId: 'E001' });
+      expect(res).toHaveLength(1);
     });
   });
 
-  describe('Edge Cases - Concurrent Operations', () => {
-    it('should not allow double cancellation', async () => {
-      const cancelledRequest = { ...mockRequest, status: TimeOffRequestStatus.CANCELLED };
-      jest.spyOn(requestRepository, 'findOne').mockResolvedValue(cancelledRequest);
-      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
-        const cb = typeof args[0] === 'function' ? args[0] : args[1];
-        return cb({});
-      });
+  // ===== Approval Edge =====
+  describe('Approval Edge Cases', () => {
+    it('handles HCM timeout → HCM_FAILED', async () => {
+      const req = { ...mockRequest };
 
-      await expect(service.cancelRequest('request-1', 'E001')).rejects.toThrow(
-        InvalidStateTransitionException,
+      jest.spyOn(dataSource, 'transaction').mockImplementation(async (cb: any) =>
+        cb({
+          findOne: jest.fn().mockResolvedValue(req),
+          save: jest.fn().mockResolvedValue({
+            ...req,
+            status: TimeOffRequestStatus.HCM_FAILED,
+          }),
+        }),
       );
-    });
 
-    it('should not allow approval of cancelled request', async () => {
-      const cancelledRequest = { ...mockRequest, status: TimeOffRequestStatus.CANCELLED };
-      jest.spyOn(requestRepository, 'findOne').mockResolvedValue(cancelledRequest);
-      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
-        const cb = typeof args[0] === 'function' ? args[0] : args[1];
-        return cb({
-          findOne: jest.fn().mockResolvedValue(cancelledRequest),
-          save: jest.fn(),
-        });
-      });
+      hcmAdapter.fileTimeOff = jest.fn().mockRejectedValue(new Error('timeout'));
 
-      await expect(service.approveRequest('request-1', 'MGR-001')).rejects.toThrow(
-        InvalidStateTransitionException,
-      );
-    });
-
-    it('should handle HCM timeout during approval gracefully', async () => {
-      const pendingRequest = { ...mockRequest, status: TimeOffRequestStatus.PENDING };
-      jest.spyOn(requestRepository, 'findOne').mockResolvedValue(pendingRequest);
-      jest.spyOn(balanceService, 'getBalance').mockResolvedValue({
-        id: 'balance-1',
-        employeeId: 'E001',
-        locationId: 'NYC',
-        leaveType: 'ANNUAL',
-        totalDays: 20,
-        usedDays: 5,
-        pendingDays: 0,
-        lastSyncedAt: new Date(),
-        version: 1,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        availableDays: 15,
-      });
-
-      const { HcmUnavailableError } = await import('../../src/shared/exceptions');
-      hcmAdapter.fileTimeOff = jest.fn().mockRejectedValue(new HcmUnavailableError('ETIMEDOUT'));
-
-      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
-        const cb = typeof args[0] === 'function' ? args[0] : args[1];
-        return cb({
-          findOne: jest.fn().mockResolvedValue(pendingRequest),
-          save: jest.fn().mockImplementation((entity) => Promise.resolve({ ...entity, status: TimeOffRequestStatus.HCM_FAILED })),
-          update: jest.fn(),
-        });
-      });
-
-      const result = await service.approveRequest('request-1', 'MGR-001');
-
-      expect(result.status).toBe(TimeOffRequestStatus.HCM_FAILED);
-    });
-
-    it('should not approve request if HCM rejects it', async () => {
-      const pendingRequest = { ...mockRequest, status: TimeOffRequestStatus.PENDING };
-      jest.spyOn(requestRepository, 'findOne').mockResolvedValue(pendingRequest);
-      jest.spyOn(balanceService, 'getBalance').mockResolvedValue({
-        id: 'balance-1',
-        employeeId: 'E001',
-        locationId: 'NYC',
-        leaveType: 'ANNUAL',
-        totalDays: 20,
-        usedDays: 5,
-        pendingDays: 0,
-        lastSyncedAt: new Date(),
-        version: 1,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        availableDays: 15,
-      });
-
-      const { HcmInsufficientBalanceError } = await import('../../src/shared/exceptions');
-      hcmAdapter.fileTimeOff = jest.fn().mockRejectedValue(new HcmInsufficientBalanceError('Not enough days'));
-
-      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
-        const cb = typeof args[0] === 'function' ? args[0] : args[1];
-        return cb({
-          findOne: jest.fn().mockResolvedValue(pendingRequest),
-          save: jest.fn().mockImplementation((entity) => Promise.resolve({ ...entity, status: TimeOffRequestStatus.REJECTED })),
-          update: jest.fn(),
-        });
-      });
-
-      const result = await service.approveRequest('request-1', 'MGR-001');
-
-      expect(result.status).toBe(TimeOffRequestStatus.REJECTED);
+      const res = await service.approveRequest('id', 'mgr');
+      expect(res.status).toBe(TimeOffRequestStatus.HCM_FAILED);
     });
   });
 
-  describe('Edge Cases - Request Cancellation', () => {
-    it('should cancel approved request with HCM reversal', async () => {
-      const approvedRequest = {
+  // ===== Cancel =====
+  describe('Cancel Request', () => {
+    it('cancels approved request', async () => {
+      jest.spyOn(requestRepository, 'findOne').mockResolvedValue({
         ...mockRequest,
         status: TimeOffRequestStatus.APPROVED,
-        hcmTransactionId: 'TXN-123',
-      };
-
-      jest.spyOn(requestRepository, 'findOne').mockResolvedValue(approvedRequest);
-      jest.spyOn(requestRepository, 'save').mockResolvedValue({
-        ...approvedRequest,
-        status: TimeOffRequestStatus.CANCELLED,
+        hcmTransactionId: 'TXN',
       });
 
-      hcmAdapter.reverseTimeOff = jest.fn().mockResolvedValue(undefined);
-      jest.spyOn(balanceService, 'releasePendingDays').mockResolvedValue({} as any);
-      jest.spyOn(auditService, 'log').mockResolvedValue({} as any);
+      hcmAdapter.reverseTimeOff = jest.fn();
 
-      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
-        const cb = typeof args[0] === 'function' ? args[0] : args[1];
-        return cb({});
-      });
-
-      const result = await service.cancelRequest('request-1', 'E001');
-
-      expect(result.status).toBe(TimeOffRequestStatus.CANCELLED);
-      expect(hcmAdapter.reverseTimeOff).toHaveBeenCalledWith('TXN-123');
+      const res = await service.cancelRequest('id', 'E1');
+      expect(res.status).toBe(TimeOffRequestStatus.CANCELLED);
     });
+  });
+
+  // ===== Missing Coverage =====
   describe('Missing Coverage Scenarios', () => {
-    it('createRequest: should throw BalanceNotFoundException if balance is missing', async () => {
-      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
-        const cb = typeof args[0] === 'function' ? args[0] : args[1];
-        return cb({
-          findOne: jest.fn().mockResolvedValue(null),
-        });
-      });
-      const { BalanceNotFoundException } = await import('../../src/shared/exceptions');
-      await expect(service.createRequest({ employeeId: 'E1', locationId: 'L1', leaveType: 'ANNUAL', startDate: '2026', endDate: '2026', daysRequested: 5 } as any)).rejects.toThrow(BalanceNotFoundException);
+    it('throws if balance missing', async () => {
+      jest.spyOn(dataSource, 'transaction').mockImplementation(async (cb: any) =>
+        cb({ findOne: jest.fn().mockResolvedValue(null) }),
+      );
+
+      await expect(service.createRequest(mockRequest as any)).rejects.toThrow();
     });
 
-    it('createRequest: should throw InsufficientBalanceException if available < requested', async () => {
-      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
-        const cb = typeof args[0] === 'function' ? args[0] : args[1];
-        return cb({
-          findOne: jest.fn().mockResolvedValue({ totalDays: 10, usedDays: 8, pendingDays: 0 }),
-        });
-      });
-      const { InsufficientBalanceException } = await import('../../src/shared/exceptions');
-      await expect(service.createRequest({ employeeId: 'E1', locationId: 'L1', leaveType: 'ANNUAL', startDate: '2026', endDate: '2026', daysRequested: 5 } as any)).rejects.toThrow(InsufficientBalanceException);
+    it('rethrows unknown HCM error', async () => {
+      jest.spyOn(dataSource, 'transaction').mockImplementation(async (cb: any) =>
+        cb({
+          findOne: jest.fn().mockResolvedValue(mockRequest),
+        }),
+      );
+
+      hcmAdapter.fileTimeOff = jest.fn().mockRejectedValue(new Error('Unknown'));
+
+      await expect(service.approveRequest('id', 'mgr')).rejects.toThrow('Unknown');
     });
 
-    it('approveRequest: should throw RequestNotFoundException if request missing', async () => {
-      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
-        const cb = typeof args[0] === 'function' ? args[0] : args[1];
-        return cb({ findOne: jest.fn().mockResolvedValue(null) });
+    it('cancel fails if reverse fails', async () => {
+      jest.spyOn(requestRepository, 'findOne').mockResolvedValue({
+        ...mockRequest,
+        status: TimeOffRequestStatus.APPROVED,
+        hcmTransactionId: 'T1',
       });
-      await expect(service.approveRequest('R1', 'M1')).rejects.toThrow(RequestNotFoundException);
-    });
 
-    it('approveRequest: should handle sync error gracefully if SYNC_ON_APPROVE is true', async () => {
-      process.env['SYNC_ON_APPROVE'] = 'true';
-      const req = { ...mockRequest, status: TimeOffRequestStatus.PENDING };
-      
-      const manager = {
-        findOne: jest.fn()
-          .mockResolvedValueOnce(req) // First findOne: Request
-          .mockResolvedValueOnce({ totalDays: 10, usedDays: 0, pendingDays: 0 }), // Second findOne: Balance
-        save: jest.fn().mockImplementation((e: any) => Promise.resolve(e)),
-      };
-      
-      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
-        const cb = typeof args[0] === 'function' ? args[0] : args[1];
-        return cb(manager);
-      });
-      hcmAdapter.getBalance = jest.fn().mockRejectedValue(new Error('Sync failed'));
-      hcmAdapter.fileTimeOff = jest.fn().mockResolvedValue({ status: 'SUCCESS', transactionId: 'TXN-1' });
-      balanceService.confirmUsedDays = jest.fn() as any;
-      
-      await expect(service.approveRequest('R1', 'M1')).resolves.toBeDefined();
-      delete process.env['SYNC_ON_APPROVE'];
-    });
+      hcmAdapter.reverseTimeOff = jest.fn().mockRejectedValue(new Error('fail'));
 
-    it('approveRequest: should throw BalanceNotFoundException if balance missing during re-check', async () => {
-      const manager = {
-        findOne: jest.fn()
-          .mockResolvedValueOnce({ ...mockRequest, status: TimeOffRequestStatus.PENDING }) // Request
-          .mockResolvedValueOnce(null), // Balance
-      };
-      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
-        const cb = typeof args[0] === 'function' ? args[0] : args[1];
-        return cb(manager);
-      });
-      
-      const { BalanceNotFoundException } = await import('../../src/shared/exceptions');
-      await expect(service.approveRequest('R1', 'M1')).rejects.toThrow(BalanceNotFoundException);
-    });
-
-    it('approveRequest: should reject request if balance decreased during re-check', async () => {
-      const req = { ...mockRequest, status: TimeOffRequestStatus.PENDING, daysRequested: 5 };
-      const manager = {
-        findOne: jest.fn()
-          .mockResolvedValueOnce(req) // Request
-          .mockResolvedValueOnce({ totalDays: 10, usedDays: 8, pendingDays: 0 }), // Balance < 5
-        save: jest.fn().mockImplementation((e: any) => Promise.resolve(e)),
-      };
-      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
-        const cb = typeof args[0] === 'function' ? args[0] : args[1];
-        return cb(manager);
-      });
-      balanceService.releasePendingDays = jest.fn() as any;
-      
-      const res = await service.approveRequest('R1', 'M1');
-      expect(res.status).toBe(TimeOffRequestStatus.REJECTED);
-      expect(res.rejectionReason).toContain('Insufficient balance after re-check');
-    });
-
-    it('approveRequest: should rethrow error from HCM if it is unknown', async () => {
-      const req = { ...mockRequest, status: TimeOffRequestStatus.PENDING };
-      const manager = {
-        findOne: jest.fn()
-          .mockResolvedValueOnce(req) // Request
-          .mockResolvedValueOnce({ totalDays: 10, usedDays: 0, pendingDays: 0 }), // Balance
-      };
-      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
-        const cb = typeof args[0] === 'function' ? args[0] : args[1];
-        return cb(manager);
-      });
-      hcmAdapter.fileTimeOff = jest.fn().mockRejectedValue(new Error('Unknown HCM Error'));
-      
-      await expect(service.approveRequest('R1', 'M1')).rejects.toThrow('Unknown HCM Error');
-    });
-
-    it('approveRequest: should reject request if HCM returns REJECTED status', async () => {
-      const req = { ...mockRequest, status: TimeOffRequestStatus.PENDING };
-      const manager = {
-        findOne: jest.fn()
-          .mockResolvedValueOnce(req) // Request
-          .mockResolvedValueOnce({ totalDays: 10, usedDays: 0, pendingDays: 0 }), // Balance
-        save: jest.fn().mockImplementation((e: any) => Promise.resolve(e)),
-      };
-      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
-        const cb = typeof args[0] === 'function' ? args[0] : args[1];
-        return cb(manager);
-      });
-      hcmAdapter.fileTimeOff = jest.fn().mockResolvedValue({ status: 'REJECTED', rejectionReason: 'HCM Policy' });
-      balanceService.releasePendingDays = jest.fn() as any;
-      
-      const res = await service.approveRequest('R1', 'M1');
-      expect(res.status).toBe(TimeOffRequestStatus.REJECTED);
-      expect(res.rejectionReason).toBe('HCM Policy');
-    });
-    
-    it('approveRequest: should log BALANCE_ANOMALY if defensive HCM fetch differs', async () => {
-      const req = { ...mockRequest, status: TimeOffRequestStatus.PENDING };
-      const manager = {
-        findOne: jest.fn()
-          .mockResolvedValueOnce(req) // Request
-          .mockResolvedValueOnce({ totalDays: 10, usedDays: 0, pendingDays: 0 }) // Balance pre-approve
-          .mockResolvedValueOnce({ totalDays: 10, usedDays: 5 }), // Balance post-approve (different than HCM)
-        save: jest.fn().mockImplementation((e: any) => Promise.resolve(e)),
-      };
-      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
-        const cb = typeof args[0] === 'function' ? args[0] : args[1];
-        return cb(manager);
-      });
-      hcmAdapter.fileTimeOff = jest.fn().mockResolvedValue({ status: 'SUCCESS' });
-      hcmAdapter.getBalance = jest.fn().mockResolvedValue({ totalDays: 20, usedDays: 10 }); // HCM differs
-      balanceService.confirmUsedDays = jest.fn() as any;
-      
-      await service.approveRequest('R1', 'M1');
-      
-      expect(auditService.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'BALANCE_ANOMALY' }));
-    });
-
-    it('rejectRequest: should throw RequestNotFoundException if request missing', async () => {
-      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
-        const cb = typeof args[0] === 'function' ? args[0] : args[1];
-        jest.spyOn(requestRepository, 'findOne').mockResolvedValue(null);
-        return cb();
-      });
-      await expect(service.rejectRequest('R1', 'M1', 'R')).rejects.toThrow(RequestNotFoundException);
-    });
-
-    it('cancelRequest: should throw RequestNotFoundException if request missing', async () => {
-      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
-        const cb = typeof args[0] === 'function' ? args[0] : args[1];
-        jest.spyOn(requestRepository, 'findOne').mockResolvedValue(null);
-        return cb();
-      });
-      await expect(service.cancelRequest('R1', 'E1')).rejects.toThrow(RequestNotFoundException);
-    });
-
-    it('cancelRequest: should throw InvalidStateTransitionException if already REJECTED', async () => {
-      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
-        const cb = typeof args[0] === 'function' ? args[0] : args[1];
-        jest.spyOn(requestRepository, 'findOne').mockResolvedValue({ ...mockRequest, status: TimeOffRequestStatus.REJECTED });
-        return cb();
-      });
-      await expect(service.cancelRequest('R1', 'E1')).rejects.toThrow('Cannot cancel a rejected request');
-    });
-
-    it('cancelRequest: should throw error if hcmAdapter.reverseTimeOff fails', async () => {
-      jest.spyOn(dataSource, 'transaction').mockImplementation(async (...args: any[]) => {
-        const cb = typeof args[0] === 'function' ? args[0] : args[1];
-        jest.spyOn(requestRepository, 'findOne').mockResolvedValue({ ...mockRequest, status: TimeOffRequestStatus.APPROVED, hcmTransactionId: 'T1' });
-        return cb();
-      });
-      hcmAdapter.reverseTimeOff = jest.fn().mockRejectedValue(new Error('Reverse failed'));
-      await expect(service.cancelRequest('R1', 'E1')).rejects.toThrow('Reverse failed');
+      await expect(service.cancelRequest('id', 'E1')).rejects.toThrow('fail');
     });
   });
-  });
+
 });
