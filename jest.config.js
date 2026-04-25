@@ -8,6 +8,7 @@ module.exports = {
   },
   collectCoverageFrom: [
     'apps/**/*.ts',
+    '!apps/hcm-mock-server/**/*.ts',
     '!apps/**/main.ts',
     '!apps/**/dist/**',
     '!apps/**/node_modules/**',

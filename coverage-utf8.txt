@@ -1,0 +1,53 @@
+﻿
+> readyon-timeoff@1.0.0 test:cov
+> jest --coverage --runInBand
+
+---------------------------------------|---------|----------|---------|---------|--------------------
+File                                   | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s  
+---------------------------------------|---------|----------|---------|---------|--------------------
+All files                              |   83.31 |    78.65 |    74.5 |   83.16 |                    
+ hcm-mock-server/src                   |       0 |      100 |     100 |       0 |                    
+  app.module.ts                        |       0 |      100 |     100 |       0 | 1-17               
+ hcm-mock-server/src/balance           |       0 |        0 |       0 |       0 |                    
+  balance.controller.ts                |       0 |        0 |       0 |       0 | 1-86               
+  balance.service.ts                   |       0 |        0 |       0 |       0 | 1-166              
+ hcm-mock-server/src/simulate          |       0 |      100 |       0 |       0 |                    
+  simulate.controller.ts               |       0 |      100 |       0 |       0 | 1-81               
+ timeoff-service/src                   |     100 |       75 |     100 |     100 |                    
+  app.module.ts                        |     100 |       75 |     100 |     100 | 16                 
+ timeoff-service/src/audit             |     100 |    66.66 |     100 |     100 |                    
+  audit.module.ts                      |     100 |      100 |     100 |     100 |                    
+  audit.service.ts                     |     100 |    66.66 |     100 |     100 | 27,29              
+ timeoff-service/src/audit/entities    |     100 |      100 |     100 |     100 |                    
+  audit-log.entity.ts                  |     100 |      100 |     100 |     100 |                    
+ timeoff-service/src/balance           |   92.15 |    69.23 |   88.23 |   92.47 |                    
+  balance.controller.ts                |      80 |       50 |      60 |   81.81 | 11-13              
+  balance.module.ts                    |     100 |      100 |     100 |     100 |                    
+  balance.service.ts                   |   93.67 |    70.83 |     100 |   93.42 | 55,102,127,169,192 
+ timeoff-service/src/balance/entities  |     100 |      100 |     100 |     100 |                    
+  leave-balance.entity.ts              |     100 |      100 |     100 |     100 |                    
+ timeoff-service/src/hcm               |   97.32 |    84.84 |     100 |   97.16 |                    
+  hcm-mock.adapter.ts                  |     100 |      100 |     100 |     100 |                    
+  hcm.adapter.ts                       |   93.87 |    80.95 |     100 |   93.61 | 56,90,95           
+  hcm.module.ts                        |     100 |       50 |     100 |     100 | 11                 
+ timeoff-service/src/health            |     100 |      100 |     100 |     100 |                    
+  health.controller.ts                 |     100 |      100 |     100 |     100 |                    
+  health.module.ts                     |     100 |      100 |     100 |     100 |                    
+ timeoff-service/src/requests          |   98.87 |    89.47 |     100 |   98.82 |                    
+  requests.controller.ts               |     100 |      100 |     100 |     100 |                    
+  requests.module.ts                   |     100 |      100 |     100 |     100 |                    
+  requests.service.ts                  |   98.55 |    88.57 |     100 |   98.52 | 437-439            
+ timeoff-service/src/requests/entities |     100 |      100 |     100 |     100 |                    
+  time-off-request.entity.ts           |     100 |      100 |     100 |     100 |                    
+ timeoff-service/src/shared            |     100 |      100 |     100 |     100 |                    
+  exceptions.ts                        |     100 |      100 |     100 |     100 |                    
+  timeoff-exception.filter.ts          |     100 |      100 |     100 |     100 |                    
+ timeoff-service/src/sync              |   94.32 |       90 |      80 |   93.89 |                    
+  reconciliation.cron.ts               |     100 |      100 |     100 |     100 |                    
+  reconciliation.service.ts            |     100 |      100 |     100 |     100 |                    
+  sync.controller.ts                   |   88.46 |      100 |      60 |    87.5 | 38-39,48           
+  sync.module.ts                       |     100 |      100 |     100 |     100 |                    
+  sync.service.ts                      |   92.42 |       80 |   83.33 |   92.18 | 157-160,180        
+ timeoff-service/src/sync/entities     |     100 |      100 |     100 |     100 |                    
+  sync-event.entity.ts                 |     100 |      100 |     100 |     100 |                    
+---------------------------------------|---------|----------|---------|---------|--------------------
